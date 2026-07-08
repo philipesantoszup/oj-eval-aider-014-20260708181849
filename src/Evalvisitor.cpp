@@ -139,9 +139,21 @@ std::any EvalVisitor::visitAtom_expr(Python3Parser::Atom_exprContext *ctx) {
 }
 
 Value EvalVisitor::evaluate_arithmetic(Value left, std::string op, Value right) {
-    // Simplified arithmetic for long long
-    long long l = std::holds_alternative<long long>(left.data) ? std::get<long long>(left.data) : 0;
-    long long r = std::holds_alternative<long long>(right.data) ? std::get<long long>(right.data) : 0;
+    // Simplified arithmetic for BigInt (converting to long long for now as a placeholder)
+    auto to_ll = [](const Value& v) -> long long {
+        if (std::holds_alternative<BigInt>(v.data)) {
+            BigInt bi = std::get<BigInt>(v.data);
+            long long res = std::stoll(bi.val);
+            return bi.negative ? -res : res;
+        }
+        if (std::holds_alternative<double>(v.data)) {
+            return static_cast<long long>(std::get<double>(v.data));
+        }
+        return 0LL;
+    };
+
+    long long l = to_ll(left);
+    long long r = to_ll(right);
     if (op == "+") return Value(l + r);
     if (op == "-") return Value(l - r);
     if (op == "*") return Value(l * r);
