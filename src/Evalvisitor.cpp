@@ -67,7 +67,7 @@ std::any EvalVisitor::visitAtom(Python3Parser::AtomContext *ctx) {
     if (ctx->TRUE()) return Value(true);
     if (ctx->FALSE()) return Value(false);
     if (ctx->NONE()) return Value(nullptr);
-    if (ctx->STRING()) {
+    if (!ctx->STRING().empty()) {
         std::string s = ctx->STRING(0)->getText();
         if (s.length() >= 2) s = s.substr(1, s.length() - 2);
         return Value(s);
@@ -115,7 +115,16 @@ std::any EvalVisitor::visitTerm(Python3Parser::TermContext *ctx) {
 std::any EvalVisitor::visitFactor(Python3Parser::FactorContext *ctx) {
     if (ctx->factor()) {
         Value v = std::any_cast<Value>(visitFactor(ctx->factor()));
-        if (ctx->MINUS()) return Value(-std::get<long long>(v.data)); // Simplified
+        if (ctx->MINUS()) {
+            if (std::holds_alternative<BigInt>(v.data)) {
+                BigInt bi = std::get<BigInt>(v.data);
+                if (bi.val != "0") bi.negative = !bi.negative;
+                return Value(bi);
+            }
+            if (std::holds_alternative<double>(v.data)) {
+                return Value(-std::get<double>(v.data));
+            }
+        }
         return v;
     }
     return visitAtom_expr(ctx->atom_expr());
