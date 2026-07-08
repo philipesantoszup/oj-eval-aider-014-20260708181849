@@ -33,7 +33,7 @@ std::any EvalVisitor::visitSmall_stmt(Python3Parser::Small_stmtContext *ctx) {
 
 std::any EvalVisitor::visitExpr_stmt(Python3Parser::Expr_stmtContext *ctx) {
     // Handle assignment: testlist = testlist
-    if (ctx->ASSIGN() != nullptr) {
+    if (!ctx->ASSIGN().empty()) {
         Value val = std::any_cast<Value>(visitTestlist(ctx->testlist(0)));
         // Simplified: only handle single variable assignment for now
         // In a real implementation, we'd iterate through the testlist
