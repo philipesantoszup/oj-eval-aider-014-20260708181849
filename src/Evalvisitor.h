@@ -33,7 +33,14 @@ struct BigInt {
             negative = false;
             val = s;
         }
+        remove_leading_zeros();
         if (val == "0") negative = false;
+    }
+
+    void remove_leading_zeros() {
+        size_t first = val.find_first_not_of('0');
+        if (first == std::string::npos) val = "0";
+        else val = val.substr(first);
     }
 
     std::string to_string() const {
@@ -51,6 +58,75 @@ struct BigInt {
 
     bool operator==(const BigInt& other) const {
         return negative == other.negative && val == other.val;
+    }
+
+    static BigInt add_abs(const BigInt& a, const BigInt& b);
+    static BigInt sub_abs(const BigInt& a, const BigInt& b);
+    static BigInt mul_abs(const BigInt& a, const BigInt& b);
+    static std::pair<BigInt, BigInt> div_mod_abs(const BigInt& a, const BigInt& b);
+
+    BigInt operator+(const BigInt& other) const {
+        if (negative == other.negative) {
+            BigInt res = add_abs(*this, other);
+            res.negative = negative;
+            res.remove_leading_zeros();
+            if (res.val == "0") res.negative = false;
+            return res;
+        }
+        if (abs_less(other)) {
+            BigInt res = sub_abs(other, *this);
+            res.negative = other.negative;
+            res.remove_leading_zeros();
+            if (res.val == "0") res.negative = false;
+            return res;
+        } else {
+            BigInt res = sub_abs(*this, other);
+            res.negative = negative;
+            res.remove_leading_zeros();
+            if (res.val == "0") res.negative = false;
+            return res;
+        }
+    }
+
+    BigInt operator-(const BigInt& other) const {
+        BigInt neg_other = other;
+        neg_other.negative = !other.negative;
+        if (neg_other.val == "0") neg_other.negative = false;
+        return *this + neg_other;
+    }
+
+    BigInt operator*(const BigInt& other) const {
+        BigInt res = mul_abs(*this, other);
+        res.negative = (negative != other.negative);
+        res.remove_leading_zeros();
+        if (res.val == "0") res.negative = false;
+        return res;
+    }
+
+    BigInt operator/(const BigInt& other) const {
+        if (other.val == "0") return BigInt(0);
+        auto res = div_mod_abs(*this, other);
+        BigInt q = res.first;
+        q.negative = (negative != other.negative);
+        q.remove_leading_zeros();
+        if (q.val == "0") q.negative = false;
+        return q;
+    }
+
+    BigInt operator%(const BigInt& other) const {
+        if (other.val == "0") return BigInt(0);
+        auto res = div_mod_abs(*this, other);
+        BigInt r = res.second;
+        r.negative = negative;
+        r.remove_leading_zeros();
+        if (r.val == "0") r.negative = false;
+        return r;
+    }
+
+private:
+    bool abs_less(const BigInt& other) const {
+        if (val.length() != other.val.length()) return val.length() < other.val.length();
+        return val < other.val;
     }
 };
 
@@ -84,7 +160,6 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 public:
     EvalVisitor();
 
-    // Override visitor methods to implement Python evaluation logic
     std::any visitFile_input(Python3Parser::File_inputContext *ctx) override;
     std::any visitStmt(Python3Parser::StmtContext *ctx) override;
     std::any visitSimple_stmt(Python3Parser::Simple_stmtContext *ctx) override;
@@ -101,10 +176,12 @@ public:
     std::any visitNot_test(Python3Parser::Not_testContext *ctx) override;
     std::any visitComparison(Python3Parser::ComparisonContext *ctx) override;
     std::any visitTrailer(Python3Parser::TrailerContext *ctx) override;
+    std::any visitTestlist(Python3Parser::TestlistContext *ctx) override;
 
 private:
     std::map<std::string, Value> globals;
     Value evaluate_arithmetic(Value left, std::string op, Value right);
+    std::string extract_name(Python3Parser::TestlistContext *ctx);
 };
 
 #endif//PYTHON_INTERPRETER_EVALVISITOR_H

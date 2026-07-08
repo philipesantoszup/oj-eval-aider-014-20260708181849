@@ -1,5 +1,73 @@
 #include "Evalvisitor.h"
 
+// BigInt helper implementations
+BigInt BigInt::add_abs(const BigInt& a, const BigInt& b) {
+    std::string res = "";
+    int i = a.val.length() - 1, j = b.val.length() - 1, carry = 0;
+    while (i >= 0 || j >= 0 || carry) {
+        int sum = carry + (i >= 0 ? a.val[i--] - '0' : 0) + (j >= 0 ? b.val[j--] - '0' : 0);
+        res += (sum % 10) + '0';
+        carry = sum / 10;
+    }
+    std::reverse(res.begin(), res.end());
+    return BigInt(res);
+}
+
+BigInt BigInt::sub_abs(const BigInt& a, const BigInt& b) {
+    std::string res = "";
+    int i = a.val.length() - 1, j = b.val.length() - 1, borrow = 0;
+    while (i >= 0) {
+        int sub = (a.val[i--] - '0') - (j >= 0 ? b.val[j--] - '0' : 0) - borrow;
+        if (sub < 0) { sub += 10; borrow = 1; }
+        else borrow = 0;
+        res += sub + '0';
+    }
+    std::reverse(res.begin(), res.end());
+    BigInt result(res);
+    result.remove_leading_zeros();
+    return result;
+}
+
+BigInt BigInt::mul_abs(const BigInt& a, const BigInt& b) {
+    if (a.val == "0" || b.val == "0") return BigInt(0);
+    std::vector<int> res(a.val.length() + b.val.length(), 0);
+    for (int i = a.val.length() - 1; i >= 0; --i) {
+        for (int j = b.val.length() - 1; j >= 0; --j) {
+            res[i + j + 1] += (a.val[i] - '0') * (b.val[j] - '0');
+            res[i + j] += res[i + j + 1] / 10;
+            res[i + j + 1] %= 10;
+        }
+    }
+    std::string s = "";
+    for (int x : res) s += (x + '0');
+    BigInt result(s);
+    result.remove_leading_zeros();
+    return result;
+}
+
+std::pair<BigInt, BigInt> BigInt::div_mod_abs(const BigInt& a, const BigInt& b) {
+    if (b.val == "0") return {BigInt(0), BigInt(0)};
+    if (a < b) return {BigInt(0), a};
+
+    BigInt quotient("0"), remainder("0");
+    for (char c : a.val) {
+        remainder = remainder * BigInt(10);
+        remainder.val += c;
+        remainder.remove_leading_zeros();
+        
+        int d = 0;
+        // Since we are dividing by b, and the current remainder is at most 10*b + 9,
+        // d will be between 0 and 9.
+        while (!(remainder < b)) {
+            remainder = sub_abs(remainder, b);
+            d++;
+        }
+        quotient.val += (d + '0');
+    }
+    quotient.remove_leading_zeros();
+    return {quotient, remainder};
+}
+
 EvalVisitor::EvalVisitor() {}
 
 std::any EvalVisitor::visitFile_input(Python3Parser::File_inputContext *ctx) {
@@ -32,30 +100,59 @@ std::any EvalVisitor::visitSmall_stmt(Python3Parser::Small_stmtContext *ctx) {
 }
 
 std::any EvalVisitor::visitExpr_stmt(Python3Parser::Expr_stmtContext *ctx) {
-    // Handle assignment: testlist = testlist
     if (!ctx->ASSIGN().empty()) {
-        Value val = std::any_cast<Value>(visitTestlist(ctx->testlist(0)));
-        // Simplified: only handle single variable assignment for now
-        // In a real implementation, we'd iterate through the testlist
-        // For now, we assume the first element of the testlist is a name
-        // This is a placeholder for the complex unpacking logic
+        Value val = std::any_cast<Value>(visitTestlist(ctx->testlist(1)));
+        std::string var_name = extract_name(ctx->testlist(0));
+        if (var_name != "unknown") {
+            globals[var_name] = val;
+        }
     } else {
-        // Just evaluate the expression
         visitTestlist(ctx->testlist(0));
     }
     return nullptr;
+}
+
+std::string EvalVisitor::extract_name(Python3Parser::TestlistContext *ctx) {
+    if (!ctx || ctx->test().empty()) return "unknown";
+    auto test = ctx->test(0);
+    if (!test->or_test()) return "unknown";
+    auto or_test = test->or_test();
+    if (or_test->and_test().empty()) return "unknown";
+    auto and_test = or_test->and_test(0);
+    if (and_test->not_test().empty()) return "unknown";
+    auto not_test = and_test->not_test(0);
+    if (!not_test->comparison()) return "unknown";
+    auto comp = not_test->comparison();
+    if (comp->arith_expr().empty()) return "unknown";
+    auto arith = comp->arith_expr(0);
+    if (arith->term().empty()) return "unknown";
+    auto term = arith->term(0);
+    if (term->factor().empty()) return "unknown";
+    auto factor = term->factor(0);
+    if (!factor->atom_expr()) return "unknown";
+    auto atom_expr = factor->atom_expr();
+    if (!atom_expr->atom()) return "unknown";
+    auto atom = atom_expr->atom();
+    if (atom->NAME()) return atom->NAME()->getText();
+    return "unknown";
+}
+
+std::any EvalVisitor::visitTestlist(Python3Parser::TestlistContext *ctx) {
+    Value res;
+    if (ctx->test().size() > 0) {
+        res = std::any_cast<Value>(visitTest(ctx->test(0)));
+    }
+    return res;
 }
 
 std::any EvalVisitor::visitAtom(Python3Parser::AtomContext *ctx) {
     if (ctx->NAME()) {
         std::string name = ctx->NAME()->getText();
         if (globals.count(name)) return globals[name];
-        // Handle built-ins like 'print'
         if (name == "print") {
-            // We return a special marker or handle it in Trailer
             return std::string("builtin_print");
         }
-        return Value(0LL); // Default
+        return Value(0LL);
     }
     if (ctx->NUMBER()) {
         std::string text = ctx->NUMBER()->getText();
@@ -76,18 +173,24 @@ std::any EvalVisitor::visitAtom(Python3Parser::AtomContext *ctx) {
 }
 
 std::any EvalVisitor::visitTrailer(Python3Parser::TrailerContext *ctx) {
-    // Handle function calls: atom(args)
-    // This is where 'print' is actually executed
-    // We need the atom value from the parent
-    // For simplicity in this first pass, we'll handle the print call
-    // by checking the context or the result of the atom
-    
-    // This is a simplified implementation
-    if (ctx->arglist()) {
-        // If the atom was "print", we print the arguments
-        // In a real visitor, we'd pass the atom's value here
-        // For now, we'll just print a placeholder or the first arg
-        // to show we are making progress.
+    auto atom_expr = ctx->getParent()->getRuleContext<Python3Parser::Atom_exprContext>();
+    if (atom_expr && atom_expr->atom()) {
+        std::any atom_val = visitAtom(atom_expr->atom());
+        Value v = std::any_cast<Value>(atom_val);
+        if (std::holds_alternative<std::string>(v.data) && 
+            std::get<std::string>(v.data) == "builtin_print") {
+            
+            if (ctx->arglist()) {
+                auto args = ctx->arglist()->argument();
+                for (size_t i = 0; i < args.size(); ++i) {
+                    Value arg_val = std::any_cast<Value>(visitTest(args[i]->test(0)));
+                    std::cout << arg_val.to_string();
+                    if (i < args.size() - 1) std::cout << " ";
+                }
+            }
+            std::cout << std::endl;
+            return Value(nullptr);
+        }
     }
     return Value(0LL);
 }
@@ -124,6 +227,8 @@ std::any EvalVisitor::visitFactor(Python3Parser::FactorContext *ctx) {
             if (std::holds_alternative<double>(v.data)) {
                 return Value(-std::get<double>(v.data));
             }
+        } else if (ctx->ADD()) {
+            return v;
         }
         return v;
     }
@@ -139,29 +244,30 @@ std::any EvalVisitor::visitAtom_expr(Python3Parser::Atom_exprContext *ctx) {
 }
 
 Value EvalVisitor::evaluate_arithmetic(Value left, std::string op, Value right) {
-    // Simplified arithmetic for BigInt (converting to long long for now as a placeholder)
-    auto to_ll = [](const Value& v) -> long long {
-        if (std::holds_alternative<BigInt>(v.data)) {
-            BigInt bi = std::get<BigInt>(v.data);
-            long long res = std::stoll(bi.val);
-            return bi.negative ? -res : res;
-        }
-        if (std::holds_alternative<double>(v.data)) {
-            return static_cast<long long>(std::get<double>(v.data));
-        }
-        return 0LL;
-    };
+    if (std::holds_alternative<BigInt>(left.data) && std::holds_alternative<BigInt>(right.data)) {
+        BigInt l = std::get<BigInt>(left.data);
+        BigInt r = std::get<BigInt>(right.data);
+        if (op == "+") return Value(l + r);
+        if (op == "-") return Value(l - r);
+        if (op == "*") return Value(l * r);
+        if (op == "/") return Value(l / r);
+        if (op == "%") return Value(l % r);
+    }
+    
+    double l = 0, r = 0;
+    if (std::holds_alternative<BigInt>(left.data)) l = std::stod(std::get<BigInt>(left.data).to_string());
+    else if (std::holds_alternative<double>(left.data)) l = std::get<double>(left.data);
+    
+    if (std::holds_alternative<BigInt>(right.data)) r = std::stod(std::get<BigInt>(right.data).to_string());
+    else if (std::holds_alternative<double>(right.data)) r = std::get<double>(right.data);
 
-    long long l = to_ll(left);
-    long long r = to_ll(right);
     if (op == "+") return Value(l + r);
     if (op == "-") return Value(l - r);
     if (op == "*") return Value(l * r);
-    if (op == "/") return Value(r == 0 ? 0LL : l / r);
+    if (op == "/") return Value(r == 0 ? 0.0 : l / r);
     return Value(0LL);
 }
 
-// Stubs for other required methods to avoid crashes
 std::any EvalVisitor::visitTest(Python3Parser::TestContext *ctx) { return visitOr_test(ctx->or_test()); }
 std::any EvalVisitor::visitOr_test(Python3Parser::Or_testContext *ctx) { return visitAnd_test(ctx->and_test(0)); }
 std::any EvalVisitor::visitAnd_test(Python3Parser::And_testContext *ctx) { return visitNot_test(ctx->not_test(0)); }
